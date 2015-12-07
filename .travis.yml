@@ -1,0 +1,59 @@
+# Use new container infrastructure to enable caching
+sudo: required
+
+# Choose a lightweight base image; we provide our own build tools.
+language: c
+
+# GHC depends on GMP. You can add other dependencies here as well.
+addons:
+  apt:
+    packages:
+    - libgmp-dev
+    - upx-ucl
+
+services:
+  - docker
+
+# The different configurations we want to test. You could also do things like
+# change flags or use --stack-yaml to point to a different file.
+env:
+- ARGS="--resolver nightly"
+
+before_install:
+# Download and unpack the stack executable
+- mkdir -p ~/.local/bin
+- export PATH=$PATH:$HOME/.local/bin
+- travis_retry curl -L https://github.com/commercialhaskell/stack/releases/download/v0.1.8.0/stack-0.1.8.0-linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
+
+
+# This line does all of the work: installs GHC if necessary, build the library,
+# executables, and test suites, and runs the test suites. --no-terminal works
+# around some quirks in Travis's terminal implementation.
+script: stack $ARGS install --no-terminal --install-ghc
+
+# Caching so the next build will be fast too.
+cache:
+  directories:
+  - $HOME/.stack
+
+before_deploy:
+- upx ~/.local/bin/timecache
+- docker login -e="$BINTRAY_EMAIL" -u="$BINTRAY_USERNAME" -p="$BINTRAY_PASSWORD"
+- docker pull fpco/ubuntu-with-libgmp:14.04
+- stack image container
+- docker tag -f atooma-docker-images.bintray.io/atooma/simplepush atooma-docker-images.bintray.io/atooma/simplepush:$TRAVIS_TAG
+- docker tag -f atooma-docker-images.bintray.io/atooma/simplepush atooma-docker-images.bintray.io/atooma/simplepush:latest
+- docker push atooma-docker-images.bintray.io/atooma/simplepush
+- rvm 1.9.3 do gem install mime-types -v 2.6.2
+
+deploy:
+  skip_cleanup: true
+  provider: releases
+  api_key: $GITHUB
+  file:
+    - "/home/travis/.local/bin/simplepush"
+  on:
+    tags: true
+
+notifications:
+  email: false

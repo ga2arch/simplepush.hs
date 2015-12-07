@@ -30,3 +30,11 @@ extra-package-dbs: []
 # Extra directories used by stack for building
 # extra-include-dirs: [/path/to/dir]
 # extra-lib-dirs: [/path/to/dir]
+
+image:
+  container:
+    base: "fpco/ubuntu-with-libgmp:14.04"
+    name: "atooma-docker-images.bintray.io/atooma/simplepush"
+    entrypoints:
+     - simplepush
+
