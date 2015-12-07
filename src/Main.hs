@@ -27,7 +27,7 @@ type HostUser   = MVar (H.HashMap HostName User)
 socketServer mus mhu = do
   sock <- socket AF_INET Stream 0
   setSocketOption sock ReuseAddr 1
-  setSocketOption sock KeepAlive 1
+--  setSocketOption sock KeepAlive 1
   bindSocket sock (SockAddrInet 8888 iNADDR_ANY)
   listen sock 2
   forever $ do
