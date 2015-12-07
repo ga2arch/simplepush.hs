@@ -38,7 +38,7 @@ cache:
 
 before_deploy:
 - upx ~/.local/bin/simplepush
-- docker login -e atooma-docker-images.bintray.io -u="$BINTRAY_USERNAME" -p="$BINTRAY_PASSWORD"
+- docker login -u ga2arch -p $BINTRAY_PASSWORD -e email atooma-docker-images.bintray.io
 - docker pull fpco/ubuntu-with-libgmp:14.04
 - stack image container
 - docker tag -f atooma-docker-images.bintray.io/atooma/simplepush atooma-docker-images.bintray.io/atooma/simplepush:$TRAVIS_TAG
