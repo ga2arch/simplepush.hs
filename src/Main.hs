@@ -24,13 +24,6 @@ type User       = String
 type UserSocket = MVar (H.HashMap User Socket)
 type HostUser   = MVar (H.HashMap HostName User)
 
-main :: IO ()
-main = do
-  mus <- newMVar H.empty
-  mhu <- newMVar H.empty
-  async $ httpServer mus mhu
-  socketServer mus mhu
-
 socketServer mus mhu = do
   sock <- socket AF_INET Stream 0
   setSocketOption sock ReuseAddr 1
@@ -53,15 +46,30 @@ runConn (sock, (SockAddrInet _ host)) mus mhu = do
          return $ H.insert user sock userSocket
     Nothing -> close sock
 
+serializeMessage message = do
+  let size = fromIntegral $ C.length message
+  writeToByteString (writeInt32be size <> writeByteString message)
+
 sendPush :: Socket -> ByteString -> IO ()
 sendPush socket message = do
   putStrLn $ "Pushing: " ++ (show message)
   connected <- isConnected socket
   when connected (do
-    let size = fromIntegral $ C.length message
-    let push = writeToByteString (writeInt32be size <> writeByteString message)
+    let push = serializeMessage message
     void $ send socket push)
 
+pingWorker :: UserSocket -> IO ()
+pingWorker mus = forever $ do
+  sockets <- fmap H.elems (readMVar mus)
+  let pingMessage = serializeMessage "PING"
+  mapM_ ping sockets
+  threadDelay (10 * 60 * 10^6) -- sleep 10 minutes
+  where
+    ping socket = do
+      connected <- isConnected socket
+      when connected (void $ send socket "p")
+
+httpServer :: UserSocket -> HostUser -> IO ()
 httpServer mus mhu = S.scotty 9000 $ do
   S.post "/enable" (do
     userid <- S.param "user_id" :: S.ActionM String
@@ -80,3 +88,11 @@ httpServer mus mhu = S.scotty 9000 $ do
       let socket = H.lookup userid userSocket
       when (isJust socket) (sendPush (fromJust socket) message)
       return userSocket)
+
+main :: IO ()
+main = do
+  mus <- newMVar H.empty
+  mhu <- newMVar H.empty
+  async $ httpServer mus mhu
+  async $ pingWorker mus
+  socketServer mus mhu
