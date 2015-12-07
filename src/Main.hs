@@ -76,9 +76,16 @@ httpServer mus mhu = S.scotty 9000 $ do
     userid <- S.param "user_id" :: S.ActionM String
     host   <- S.param "from"    :: S.ActionM HostName
 
-    liftIO $ putStrLn $ "Enabling: " ++ (show userid)
-    liftIO $ modifyMVar_ mhu $ \hostUser ->
-      return $ H.insert host userid hostUser
+    liftIO $ do
+      putStrLn $ "Enabling: " ++ (show userid)
+      modifyMVar_ mhu $ \hostUser ->
+        return $ H.insert host userid hostUser
+
+      modifyMVar_ mus $ \userSocket -> do
+        when (H.member userid userSocket)
+             (close (fromJust $ H.lookup userid userSocket))
+        return $ H.delete userid userSocket
+
     S.status status200)
 
   S.post "/push" (do
@@ -97,4 +104,3 @@ main = do
   async $ httpServer mus mhu
   async $ pingWorker mus
   socketServer mus mhu
-  
