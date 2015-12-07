@@ -37,7 +37,7 @@ cache:
   - $HOME/.stack
 
 before_deploy:
-- upx ~/.local/bin/simplecache
+- upx ~/.local/bin/simplepush
 - docker login -e="$BINTRAY_EMAIL" -u="$BINTRAY_USERNAME" -p="$BINTRAY_PASSWORD"
 - docker pull fpco/ubuntu-with-libgmp:14.04
 - stack image container
