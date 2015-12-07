@@ -24,6 +24,7 @@ type User       = String
 type UserSocket = MVar (H.HashMap User Socket)
 type HostUser   = MVar (H.HashMap HostName User)
 
+socketServer :: UserSocket -> HostUser -> IO ()
 socketServer mus mhu = do
   sock <- socket AF_INET Stream 0
   setSocketOption sock ReuseAddr 1
