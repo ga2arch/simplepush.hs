@@ -37,7 +37,7 @@ socketServer mus mhu = do
     forkIO $ runConn conn mus mhu
 
 -- | Handle a single user, if the user is not whitelisted, closes the connection else
--- | close old connections and insert the new socket inside the hashmap  
+-- | close old connections and insert the new socket inside the hashmap
 runConn :: (Socket, SockAddr) -> MVar UserSocket -> MVar HostUser -> IO ()
 runConn (sock, (SockAddrInet _ host)) mus mhu = do
   hostUser <- readMVar mhu
@@ -56,9 +56,9 @@ closeOld user userSocket =
   when (H.member user userSocket)
        (close (fromJust $ H.lookup user userSocket))
 
--- | Serializes a message to be sent to the user prefixing the lenght, in bytes, of the 
+-- | Serializes a message to be sent to the user prefixing the lenght, in bytes, of the
 -- | message
-serializeMessage :: ByteString -> ByteString 
+serializeMessage :: ByteString -> ByteString
 serializeMessage message = do
   let size = fromIntegral $ C.length message
   writeToByteString (writeInt32be size <> writeByteString message)
@@ -67,12 +67,12 @@ serializeMessage message = do
 sendPush :: ByteString -> Socket -> IO ()
 sendPush message socket = do
   putStrLn $ "Pushing: " ++ (show message)
-  connected <- isConnected socket
+  connected <- isWritable socket
   when connected (do
     let push = serializeMessage message
     void $ send socket push)
 
--- | Send the PING message every 10 minutes to all the active users to keep the 
+-- | Send the PING message every 10 minutes to all the active users to keep the
 -- | connection alive
 pingWorker :: MVar UserSocket -> IO ()
 pingWorker mus = forever $ do
@@ -94,9 +94,7 @@ httpServer mus mhu = S.scotty 9000 $ do
 
       modifyMVar_ mus $ \userSocket -> do
         closeOld userid userSocket
-        return $ H.delete userid userSocket
-
-    S.status status200)
+        return $ H.delete userid userSocket)
 
   S.post "/push" (do
     userid  <- S.param "user_id"
