@@ -63,13 +63,13 @@ sendPush socket message = do
 pingWorker :: UserSocket -> IO ()
 pingWorker mus = forever $ do
   sockets <- fmap H.elems (readMVar mus)
-  let pingMessage = serializeMessage "PING"
-  mapM_ ping sockets
+  let message = serializeMessage "PING"
+  mapM_ (ping message) sockets
   threadDelay (10 * 60 * 10^6) -- sleep 10 minutes
   where
-    ping socket = do
+    ping message socket = do
       connected <- isConnected socket
-      when connected (void $ send socket pingMessage)
+      when connected (void $ send socket message)
 
 httpServer :: UserSocket -> HostUser -> IO ()
 httpServer mus mhu = S.scotty 9000 $ do
