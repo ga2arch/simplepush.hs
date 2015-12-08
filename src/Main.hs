@@ -43,7 +43,8 @@ runConn (sock, (SockAddrInet _ host)) mus mhu = do
 
   case H.lookup address hostUser of
     Just user -> modifyMVar_ mus $ \userSocket -> do
-         when (H.member user userSocket) (close (fromJust $ H.lookup user userSocket))
+         when (H.member user userSocket)
+              (close (fromJust $ H.lookup user userSocket))
          return $ H.insert user sock userSocket
     Nothing -> close sock
 
@@ -68,7 +69,7 @@ pingWorker mus = forever $ do
   where
     ping socket = do
       connected <- isConnected socket
-      when connected (void $ send socket "p")
+      when connected (void $ send socket pingMessage)
 
 httpServer :: UserSocket -> HostUser -> IO ()
 httpServer mus mhu = S.scotty 9000 $ do
