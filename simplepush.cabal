@@ -19,10 +19,11 @@ executable simplepush
   build-depends:       async >= 2.0.2
                      , base >= 4.7 && < 5
                      , blaze-builder >= 0.4.0.1
-                     , blaze-builder >= 0.4.0.1
                      , bytestring >= 0.10.6.0
+                     , hslogger >= 1.2.9
                      , http-types >= 0.8.6
                      , network >= 2.6.2.1
                      , scotty >= 0.10.2
                      , transformers >= 0.4.2.0
-                     , unordered-containers
+                     , unordered-containers >= 0.2.5.1
+

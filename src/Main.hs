@@ -18,6 +18,12 @@ import           Network.HTTP.Types.Status
 import           Network.Socket                      hiding (recv, recvFrom,
                                                       send, sendTo)
 import           Network.Socket.ByteString
+import           System.IO
+import           System.Log.Formatter
+import           System.Log.Handler                  (setFormatter)
+import           System.Log.Handler.Simple
+import           System.Log.Handler.Syslog
+import           System.Log.Logger
 import qualified Web.Scotty                          as S
 
 type User       = String
@@ -42,7 +48,7 @@ runConn :: (Socket, SockAddr) -> MVar UserSocket -> MVar HostUser -> IO ()
 runConn (sock, (SockAddrInet _ host)) mus mhu = do
   hostUser <- readMVar mhu
   address  <- inet_ntoa host
-  putStrLn $ "Received new connetion from " ++ (show address)
+  debugM "SimplePush" $ "Received new connetion from " ++ (show address)
 
   case H.lookup address hostUser of
     Just user -> modifyMVar_ mus $ \userSocket -> do
@@ -66,7 +72,7 @@ serializeMessage message = do
 -- | Send a message to a user
 sendPush :: ByteString -> Socket -> IO ()
 sendPush message socket = do
-  putStrLn $ "Pushing: " ++ (show message)
+  debugM "SimplePush" $ "Pushing: " ++ (show message)
   connected <- isWritable socket
   when connected (do
     let push = serializeMessage message
@@ -88,7 +94,7 @@ httpServer mus mhu = S.scotty 9000 $ do
     host   <- S.param "from"    :: S.ActionM HostName
 
     liftIO $ do
-      putStrLn $ "Enabling: " ++ (show userid)
+      debugM "SimplePush" $ "Enabling: " ++ (show userid)
       modifyMVar_ mhu $ \hostUser ->
         return $ H.insert host userid hostUser
 
@@ -105,8 +111,16 @@ httpServer mus mhu = S.scotty 9000 $ do
       when (isJust socket) (sendPush message (fromJust socket))
       return userSocket)
 
+setupLogger = do
+  h <- streamHandler stderr DEBUG >>= \lh -> return $
+    setFormatter lh (simpleLogFormatter "[$time : $loggername : $prio] $msg")
+  updateGlobalLogger "SimplePush" (do 
+    setLevel DEBUG
+    addHandler h)
+
 main :: IO ()
 main = do
+  setupLogger
   mus <- newMVar H.empty
   mhu <- newMVar H.empty
   async $ httpServer mus mhu
