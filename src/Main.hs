@@ -21,10 +21,10 @@ import           Network.Socket.ByteString
 import qualified Web.Scotty                          as S
 
 type User       = String
-type UserSocket = MVar (H.HashMap User Socket)
-type HostUser   = MVar (H.HashMap HostName User)
+type UserSocket = H.HashMap User Socket
+type HostUser   = H.HashMap HostName User
 
-socketServer :: UserSocket -> HostUser -> IO ()
+socketServer :: MVar UserSocket -> MVar HostUser -> IO ()
 socketServer mus mhu = do
   sock <- socket AF_INET Stream 0
   setSocketOption sock ReuseAddr 1
@@ -35,7 +35,7 @@ socketServer mus mhu = do
     conn <- accept sock
     forkIO $ runConn conn mus mhu
 
-runConn :: (Socket, SockAddr) -> UserSocket -> HostUser -> IO ()
+runConn :: (Socket, SockAddr) -> MVar UserSocket -> MVar HostUser -> IO ()
 runConn (sock, (SockAddrInet _ host)) mus mhu = do
   hostUser <- readMVar mhu
   address  <- inet_ntoa host
@@ -43,35 +43,34 @@ runConn (sock, (SockAddrInet _ host)) mus mhu = do
 
   case H.lookup address hostUser of
     Just user -> modifyMVar_ mus $ \userSocket -> do
-         when (H.member user userSocket)
-              (close (fromJust $ H.lookup user userSocket))
+         closeOld user userSocket
          return $ H.insert user sock userSocket
     Nothing -> close sock
+
+closeOld :: User -> UserSocket -> IO ()
+closeOld user userSocket =
+  when (H.member user userSocket)
+       (close (fromJust $ H.lookup user userSocket))
 
 serializeMessage message = do
   let size = fromIntegral $ C.length message
   writeToByteString (writeInt32be size <> writeByteString message)
 
-sendPush :: Socket -> ByteString -> IO ()
-sendPush socket message = do
+sendPush :: ByteString -> Socket -> IO ()
+sendPush message socket = do
   putStrLn $ "Pushing: " ++ (show message)
   connected <- isConnected socket
   when connected (do
     let push = serializeMessage message
     void $ send socket push)
 
-pingWorker :: UserSocket -> IO ()
+pingWorker :: MVar UserSocket -> IO ()
 pingWorker mus = forever $ do
   sockets <- fmap H.elems (readMVar mus)
-  let message = serializeMessage "PING"
-  mapM_ (ping message) sockets
+  mapM_ (sendPush "PING") sockets
   threadDelay (10 * 60 * 10^6) -- sleep 10 minutes
-  where
-    ping message socket = do
-      connected <- isConnected socket
-      when connected (void $ send socket message)
 
-httpServer :: UserSocket -> HostUser -> IO ()
+httpServer :: MVar UserSocket -> MVar HostUser -> IO ()
 httpServer mus mhu = S.scotty 9000 $ do
   S.post "/enable" (do
     userid <- S.param "user_id" :: S.ActionM String
@@ -83,8 +82,7 @@ httpServer mus mhu = S.scotty 9000 $ do
         return $ H.insert host userid hostUser
 
       modifyMVar_ mus $ \userSocket -> do
-        when (H.member userid userSocket)
-             (close (fromJust $ H.lookup userid userSocket))
+        closeOld userid userSocket
         return $ H.delete userid userSocket
 
     S.status status200)
@@ -95,7 +93,7 @@ httpServer mus mhu = S.scotty 9000 $ do
 
     liftIO $ modifyMVar_ mus $ \userSocket -> do
       let socket = H.lookup userid userSocket
-      when (isJust socket) (sendPush (fromJust socket) message)
+      when (isJust socket) (sendPush message (fromJust socket))
       return userSocket)
 
 main :: IO ()
