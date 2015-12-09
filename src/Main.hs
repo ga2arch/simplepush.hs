@@ -54,13 +54,17 @@ runConn (sock, (SockAddrInet _ host)) mus mhu = do
     Just user -> modifyMVar_ mus $ \userSocket -> do
          closeOld user userSocket
          return $ H.insert user sock userSocket
-    Nothing -> close sock
+    Nothing -> do 
+      shutdown sock ShutdownBoth
+      close sock
 
 -- | Closes the old socket, if any, of the user
 closeOld :: User -> UserSocket -> IO ()
 closeOld user userSocket =
-  when (H.member user userSocket)
-       (close (fromJust $ H.lookup user userSocket))
+  when (H.member user userSocket) $ do
+       let sock = fromJust $ H.lookup user userSocket
+       shutdown sock ShutdownBoth
+       close sock
 
 -- | Serializes a message to be sent to the user prefixing the lenght, in bytes, of the
 -- | message
@@ -114,9 +118,9 @@ httpServer mus mhu = S.scotty 9000 $ do
 setupLogger = do
   h <- streamHandler stderr DEBUG >>= \lh -> return $
     setFormatter lh (simpleLogFormatter "[$time : $loggername : $prio] $msg")
-  updateGlobalLogger "SimplePush" (do 
+  updateGlobalLogger "SimplePush" $ do
     setLevel DEBUG
-    addHandler h)
+    addHandler h
 
 main :: IO ()
 main = do
