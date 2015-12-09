@@ -65,7 +65,7 @@ closeOld user userSocket =
        let sock = fromJust $ H.lookup user userSocket
        connected <- isWritable sock
        when (connected) $ do
-         shutdown sock ShutdownBoth
+         --shutdown sock ShutdownBoth
          close sock
 
 -- | Serializes a message to be sent to the user prefixing the lenght, in bytes, of the
