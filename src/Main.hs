@@ -1,4 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 module Main where
 
 import           Blaze.ByteString.Builder
@@ -7,6 +8,7 @@ import           Blaze.ByteString.Builder.Int
 import           Control.Concurrent
 import           Control.Concurrent.Async
 import           Control.Concurrent.MVar
+import Control.Exception
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.ByteString                     (ByteString)
@@ -27,7 +29,7 @@ import           System.Log.Logger
 import qualified Web.Scotty                          as S
 
 type User       = String
-type UserSocket = H.HashMap User Socket
+type UserSocket = H.HashMap User Handle
 type HostUser   = H.HashMap HostName User
 
 -- | Server that accepts external connections
@@ -39,13 +41,15 @@ socketServer mus mhu = do
   bindSocket sock (SockAddrInet 8888 iNADDR_ANY)
   listen sock 2
   forever $ do
-    conn <- accept sock
-    forkIO $ runConn conn mus mhu
+    (sock, (SockAddrInet _ host)) <- accept sock
+    handle <- socketToHandle sock WriteMode
+    hSetBuffering handle NoBuffering
+    forkIO (runConn handle host mus mhu) 
 
 -- | Handle a single user, if the user is not whitelisted, closes the connection else
 -- | close old connections and insert the new socket inside the hashmap
-runConn :: (Socket, SockAddr) -> MVar UserSocket -> MVar HostUser -> IO ()
-runConn (sock, (SockAddrInet _ host)) mus mhu = do
+runConn :: Handle -> HostAddress  -> MVar UserSocket -> MVar HostUser -> IO ()
+runConn handle host mus mhu = do
   hostUser <- readMVar mhu
   address  <- inet_ntoa host
   debugM "SimplePush" $ "Received new connetion from " ++ (show address)
@@ -53,20 +57,14 @@ runConn (sock, (SockAddrInet _ host)) mus mhu = do
   case H.lookup address hostUser of
     Just user -> modifyMVar_ mus $ \userSocket -> do
          closeOld user userSocket
-         return $ H.insert user sock userSocket
-    Nothing -> do 
-      shutdown sock ShutdownBoth
-      close sock
+         return $ H.insert user handle userSocket
+    Nothing -> return ()
 
 -- | Closes the old socket, if any, of the user
 closeOld :: User -> UserSocket -> IO ()
 closeOld user userSocket =
   when (H.member user userSocket) $ do
-       let sock = fromJust $ H.lookup user userSocket
-       connected <- isWritable sock
-       when (connected) $ do
-         --shutdown sock ShutdownBoth
-         close sock
+    hClose $ fromJust $ H.lookup user userSocket
 
 -- | Serializes a message to be sent to the user prefixing the lenght, in bytes, of the
 -- | message
@@ -76,13 +74,11 @@ serializeMessage message = do
   writeToByteString (writeInt32be size <> writeByteString message)
 
 -- | Send a message to a user
-sendPush :: ByteString -> Socket -> IO ()
-sendPush message socket = do
+sendPush :: ByteString -> Handle -> IO ()
+sendPush message handle = do
   debugM "SimplePush" $ "Pushing: " ++ (show message)
-  connected <- isWritable socket
-  when connected (do
-    let push = serializeMessage message
-    void $ send socket push)
+  let push = serializeMessage message
+  catch (C.hPutStr handle push) (\(e :: IOError) -> hClose handle)
 
 -- | Send the PING message every 10 minutes to all the active users to keep the
 -- | connection alive
