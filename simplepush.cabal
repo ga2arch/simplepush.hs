@@ -24,6 +24,7 @@ executable simplepush
                      , http-types >= 0.8.6
                      , network >= 2.6.2.1
                      , scotty >= 0.10.2
+                     , stm >= 2.4.4
                      , transformers >= 0.4.2.0
                      , unordered-containers >= 0.2.5.1
 

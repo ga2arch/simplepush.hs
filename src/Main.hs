@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 module Main where
@@ -6,6 +7,8 @@ import           Blaze.ByteString.Builder
 import           Blaze.ByteString.Builder.ByteString
 import           Blaze.ByteString.Builder.Int
 import           Control.Concurrent
+import Control.Concurrent.STM
+import Control.Concurrent.STM.TVar
 import           Control.Concurrent.Async
 import           Control.Concurrent.MVar
 import Control.Exception
@@ -27,14 +30,20 @@ import           System.Log.Handler.Simple
 import           System.Log.Handler.Syslog
 import           System.Log.Logger
 import qualified Web.Scotty                          as S
+import GHC.Conc.Sync (unsafeIOToSTM)
 
 type User       = String
 type UserSocket = H.HashMap User Handle
 type HostUser   = H.HashMap HostName User
 
+data ServerState = ServerState {
+     ssWhitelist :: TVar (H.HashMap HostName User)
+,    ssHandles   :: TVar (H.HashMap User Handle)
+}
+
 -- | Server that accepts external connections
-socketServer :: MVar UserSocket -> MVar HostUser -> IO ()
-socketServer mus mhu = do
+socketServer :: ServerState -> IO ()
+socketServer state = do
   sock <- socket AF_INET Stream 0
   setSocketOption sock ReuseAddr 1
 --  setSocketOption sock KeepAlive 1
@@ -44,27 +53,27 @@ socketServer mus mhu = do
     (sock, (SockAddrInet _ host)) <- accept sock
     handle <- socketToHandle sock WriteMode
     hSetBuffering handle NoBuffering
-    forkIO (runConn handle host mus mhu) 
+    forkIO (runConn handle host state)
 
 -- | Handle a single user, if the user is not whitelisted, closes the connection else
 -- | close old connections and insert the new socket inside the hashmap
-runConn :: Handle -> HostAddress  -> MVar UserSocket -> MVar HostUser -> IO ()
-runConn handle host mus mhu = do
-  hostUser <- readMVar mhu
+runConn :: Handle -> HostAddress -> ServerState -> IO ()
+runConn handle host ServerState{..} = do
+  hostUser <- atomically $ readTVar ssWhitelist
   address  <- inet_ntoa host
   debugM "SimplePush" $ "Received new connetion from " ++ (show address)
 
   case H.lookup address hostUser of
-    Just user -> modifyMVar_ mus $ \userSocket -> do
-         closeOld user userSocket
-         return $ H.insert user handle userSocket
+    Just user -> atomically $ do
+      userHandle <- readTVar ssHandles
+      closeOld user userHandle
+      writeTVar ssHandles $ H.insert user handle userHandle
     Nothing -> return ()
 
--- | Closes the old socket, if any, of the user
-closeOld :: User -> UserSocket -> IO ()
-closeOld user userSocket =
-  when (H.member user userSocket) $ do
-    hClose $ fromJust $ H.lookup user userSocket
+closeOld user userHandle =
+  case H.lookup user userHandle of
+    Just handle -> unsafeIOToSTM (hClose handle)
+    Nothing     -> return ()
 
 -- | Serializes a message to be sent to the user prefixing the lenght, in bytes, of the
 -- | message
@@ -82,36 +91,40 @@ sendPush message handle = do
 
 -- | Send the PING message every 10 minutes to all the active users to keep the
 -- | connection alive
-pingWorker :: MVar UserSocket -> IO ()
-pingWorker mus = forever $ do
-  sockets <- fmap H.elems (readMVar mus)
-  mapM_ (sendPush "PING") sockets
+pingWorker :: ServerState -> IO ()
+pingWorker ServerState{..} = forever $ do
+  handles <- fmap H.elems (atomically $ readTVar ssHandles)
+  mapM_ (sendPush "PING") handles
   threadDelay (10 * 60 * 10^6) -- sleep 10 minutes
 
 -- | Http API for enabling and pushing messages to users
-httpServer :: MVar UserSocket -> MVar HostUser -> IO ()
-httpServer mus mhu = S.scotty 9000 $ do
-  S.post "/enable" (do
+httpServer :: ServerState -> IO ()
+httpServer ServerState{..} = S.scotty 9000 $ do
+  S.post "/enable" $ do
     userid <- S.param "user_id" :: S.ActionM String
     host   <- S.param "from"    :: S.ActionM HostName
 
     liftIO $ do
       debugM "SimplePush" $ "Enabling: " ++ (show userid)
-      modifyMVar_ mhu $ \hostUser ->
-        return $ H.insert host userid hostUser
+      atomically $ do
+        hostUser <- readTVar ssWhitelist
+        writeTVar ssWhitelist $ H.insert host userid hostUser
 
-      modifyMVar_ mus $ \userSocket -> do
+        userSocket <- readTVar ssHandles
         closeOld userid userSocket
-        return $ H.delete userid userSocket)
+        writeTVar ssHandles $ H.delete userid userSocket
 
-  S.post "/push" (do
+  S.post "/push" $ do
     userid  <- S.param "user_id"
     message <- S.param "message"
 
-    liftIO $ modifyMVar_ mus $ \userSocket -> do
-      let socket = H.lookup userid userSocket
-      when (isJust socket) (sendPush message (fromJust socket))
-      return userSocket)
+    ok <- liftIO $ atomically $ do
+         userSocket <- readTVar ssHandles
+         return $ H.lookup userid userSocket
+
+    case ok of
+      Just handle  -> liftIO $ sendPush message handle
+      Nothing      -> return ()
 
 setupLogger = do
   h <- streamHandler stderr DEBUG >>= \lh -> return $
@@ -123,8 +136,9 @@ setupLogger = do
 main :: IO ()
 main = do
   setupLogger
-  mus <- newMVar H.empty
-  mhu <- newMVar H.empty
-  async $ httpServer mus mhu
-  async $ pingWorker mus
-  socketServer mus mhu
+  mus <- newTVarIO H.empty
+  mhu <- newTVarIO H.empty
+  let state = ServerState mhu mus
+  async $ httpServer state
+  async $ pingWorker state
+  socketServer state
