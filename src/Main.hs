@@ -1,24 +1,26 @@
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 module Main where
 
 import           Blaze.ByteString.Builder
 import           Blaze.ByteString.Builder.ByteString
 import           Blaze.ByteString.Builder.Int
 import           Control.Concurrent
-import Control.Concurrent.STM
-import Control.Concurrent.STM.TVar
 import           Control.Concurrent.Async
 import           Control.Concurrent.MVar
-import Control.Exception
+import           Control.Concurrent.STM
+import           Control.Concurrent.STM.TVar
+import           Control.Exception
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.ByteString                     (ByteString)
 import qualified Data.ByteString.Char8               as C
+import           Data.Either
 import qualified Data.HashMap.Strict                 as H
 import           Data.Maybe
 import           Data.Monoid
+import           GHC.Conc.Sync                       (unsafeIOToSTM)
 import           Network.HTTP.Types.Status
 import           Network.Socket                      hiding (recv, recvFrom,
                                                       send, sendTo)
@@ -30,16 +32,15 @@ import           System.Log.Handler.Simple
 import           System.Log.Handler.Syslog
 import           System.Log.Logger
 import qualified Web.Scotty                          as S
-import GHC.Conc.Sync (unsafeIOToSTM)
 
 type User       = String
 type UserSocket = H.HashMap User Handle
 type HostUser   = H.HashMap HostName User
 
 data ServerState = ServerState {
-     ssWhitelist :: TVar (H.HashMap HostName User)
-,    ssHandles   :: TVar (H.HashMap User Handle)
-}
+      ssWhitelist :: TVar (H.HashMap HostName User)
+ ,    ssHandles   :: TVar (H.HashMap User Handle)
+ }
 
 -- | Server that accepts external connections
 socketServer :: ServerState -> IO ()
@@ -70,6 +71,7 @@ runConn handle host ServerState{..} = do
       writeTVar ssHandles $ H.insert user handle userHandle
     Nothing -> return ()
 
+-- | Close old handle
 closeOld user userHandle =
   case H.lookup user userHandle of
     Just handle -> unsafeIOToSTM (hClose handle)
@@ -83,19 +85,27 @@ serializeMessage message = do
   writeToByteString (writeInt32be size <> writeByteString message)
 
 -- | Send a message to a user
-sendPush :: ByteString -> Handle -> IO ()
+sendPush :: ByteString -> Handle -> IO (Either IOError ())
 sendPush message handle = do
   debugM "SimplePush" $ "Pushing: " ++ (show message)
   let push = serializeMessage message
-  catch (C.hPutStr handle push) (\(e :: IOError) -> hClose handle)
+  try $ C.hPutStr handle push
 
 -- | Send the PING message every 10 minutes to all the active users to keep the
 -- | connection alive
 pingWorker :: ServerState -> IO ()
 pingWorker ServerState{..} = forever $ do
-  handles <- fmap H.elems (atomically $ readTVar ssHandles)
-  mapM_ (sendPush "PING") handles
+  values <- fmap H.toList (atomically $ readTVar ssHandles)
+  mapM_ (send "PING") values
   threadDelay (10 * 60 * 10^6) -- sleep 10 minutes
+  where
+    send message (user, handle) = do
+      result <- sendPush message handle
+      when (isLeft result) $ do
+        hClose handle
+        atomically $ do
+          handles <- readTVar ssHandles
+          writeTVar ssHandles $ H.delete user handles
 
 -- | Http API for enabling and pushing messages to users
 httpServer :: ServerState -> IO ()
@@ -119,11 +129,11 @@ httpServer ServerState{..} = S.scotty 9000 $ do
     message <- S.param "message"
 
     ok <- liftIO $ atomically $ do
-         userSocket <- readTVar ssHandles
-         return $ H.lookup userid userSocket
+      userSocket <- readTVar ssHandles
+      return $ H.lookup userid userSocket
 
     case ok of
-      Just handle  -> liftIO $ sendPush message handle
+      Just handle  -> void (liftIO $ sendPush message handle)
       Nothing      -> return ()
 
 setupLogger = do
