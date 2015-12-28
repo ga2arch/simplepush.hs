@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -68,7 +69,7 @@ runConn handle host ServerState{..} = do
     Just user -> atomically $ do
       userHandle <- readTVar ssHandles
       closeOld user userHandle
-      writeTVar ssHandles $ H.insert user handle userHandle
+      writeTVar ssHandles $! H.insert user handle userHandle
     Nothing -> return ()
 
 -- | Close old handle
@@ -105,7 +106,7 @@ pingWorker ServerState{..} = forever $ do
         hClose handle
         atomically $ do
           handles <- readTVar ssHandles
-          writeTVar ssHandles $ H.delete user handles
+          writeTVar ssHandles $! H.delete user handles
 
 -- | Http API for enabling and pushing messages to users
 httpServer :: ServerState -> IO ()
@@ -118,11 +119,11 @@ httpServer ServerState{..} = S.scotty 9000 $ do
       debugM "SimplePush" $ "Enabling: " ++ (show userid)
       atomically $ do
         hostUser <- readTVar ssWhitelist
-        writeTVar ssWhitelist $ H.insert host userid hostUser
+        writeTVar ssWhitelist $! H.insert host userid hostUser
 
         userSocket <- readTVar ssHandles
         closeOld userid userSocket
-        writeTVar ssHandles $ H.delete userid userSocket
+        writeTVar ssHandles $! H.delete userid userSocket
 
   S.post "/push" $ do
     userid  <- S.param "user_id"
