@@ -48,9 +48,7 @@ socketServer :: ServerState -> IO ()
 socketServer state = do
   sock <- socket AF_INET Stream 0
   setSocketOption sock ReuseAddr 1
---  setSocketOption sock KeepAlive 1
   bindSocket sock (SockAddrInet 8888 iNADDR_ANY)
-  listen sock 2
   forever $ do
     (sock, (SockAddrInet _ host)) <- accept sock
     handle <- socketToHandle sock WriteMode
@@ -104,9 +102,7 @@ pingWorker ServerState{..} = forever $ do
       result <- sendPush message handle
       when (isLeft result) $ do
         hClose handle
-        atomically $ do
-          handles <- readTVar ssHandles
-          writeTVar ssHandles $! H.delete user handles
+        atomically (modifyTVar' ssHandles $ H.delete user)
 
 -- | Http API for enabling and pushing messages to users
 httpServer :: ServerState -> IO ()
@@ -118,8 +114,7 @@ httpServer ServerState{..} = S.scotty 9000 $ do
     liftIO $ do
       debugM "SimplePush" $ "Enabling: " ++ (show userid)
       atomically $ do
-        hostUser <- readTVar ssWhitelist
-        writeTVar ssWhitelist $! H.insert host userid hostUser
+        modifyTVar' ssWhitelist $! H.insert host userid
 
         userSocket <- readTVar ssHandles
         closeOld userid userSocket
@@ -137,12 +132,15 @@ httpServer ServerState{..} = S.scotty 9000 $ do
       Just handle  -> void (liftIO $ sendPush message handle)
       Nothing      -> return ()
 
+-- | Setups the logger to output on stderr
 setupLogger = do
-  h <- streamHandler stderr DEBUG >>= \lh -> return $
-    setFormatter lh (simpleLogFormatter "[$time : $loggername : $prio] $msg")
-  updateGlobalLogger "SimplePush" $ do
-    setLevel DEBUG
-    addHandler h
+  stderrHandler <- fmap withFormatter $ streamHandler stderr DEBUG
+  let log = rootLoggerName
+  updateGlobalLogger log (setLevel DEBUG)
+  updateGlobalLogger log (setHandlers [stderrHandler])
+  where
+    withFormatter handler =
+      setFormatter handler (simpleLogFormatter "[$time $loggername $prio] $msg")
 
 main :: IO ()
 main = do
